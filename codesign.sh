@@ -12,9 +12,9 @@
 # verify those signature using osslsigncode and sigcheck.exe (on Windows only).
 
 # Requires:
-#   OpenSSL 1.x, gpg, pwgen (or apg), osslsigncode
+#   OpenSSL 1.x, gpg, pwgen (or apg), osslsigncode, GNU tail
 # Mac:
-#   brew install openssl gnupg pwgen osslsigncode apg
+#   brew install openssl gnupg pwgen osslsigncode apg coreutils
 # Win:
 #   pacman -S openssl gnupg pwgen mingw-w64-{i686,x86_64}-osslsigncode
 #   sigcheck64.exe:
@@ -50,10 +50,13 @@ case "$(uname)" in
       openssl() {
          /usr/local/opt/openssl/bin/openssl "$@"
       }
+      tail() {
+         gtail "$@"
+      }
       readonly os='mac';;
    *_NT*)
       # To find osslsigncode
-      PATH=/mingw64/bin:${PATH};
+      PATH=/mingw64/bin:${PATH}
       readonly os='win';;
    linux*)
       readonly os='linux';;
@@ -78,7 +81,7 @@ privall() {
 # Extract PKCS #7 blob from MS Authenticode signature
 #    https://www.cs.auckland.ac.nz/~pgut001/pubs/authenticode.txt
 strip_signature_header() {
-   tail +9c "$1" > "$1.truncated" && mv -f "$1.truncated" "$1"
+   tail -c +9 "$1" > "$1.truncated" && mv -f "$1.truncated" "$1"
 }
 
 readonly base='test_'
@@ -427,7 +430,7 @@ if [ -f "${test}" ] ; then
       osslsigncode extract-signature \
          -in "${file}" -out "${file}.pkcs7" > /dev/null
       strip_signature_header "${file}.pkcs7"
-      openssl asn1parse -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.txt"
+      openssl asn1parse -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.txt" || true
 
       # Verify signature with osslsigncode
       if osslsigncode verify "${file}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null ; then

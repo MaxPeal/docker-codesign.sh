@@ -1,6 +1,9 @@
 #!/bin/sh -e
 
-# Copyright 2016 Viktor Szakats (vszakats.net)
+# To the extent possible under law, Viktor Szakats (vszakats.net) 
+# has waived all copyright and related or neighboring rights to this 
+# script.
+# CC0 - https://creativecommons.org/publicdomain/zero/1.0/
 
 # This script will create a self-signed root certificate, along with a code
 # signing certificate in various formats, trying to use the best available

@@ -154,9 +154,8 @@ echo "${root_pass}"
 # TODO: replace `-v2 aes-256-cbc` with `-scrypt` @ OpenSSL 1.1.0
 
 # PKCS #8 private key, encrypted, PEM format.
-openssl genrsa 4096 2> /dev/null | \
 privout "${root}_privkey.pem" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -passout "pass:${root_pass}"
+openssl genpkey -algorithm RSA -aes-256-cbc -pkeyopt rsa_keygen_bits:4096 -pass "pass:${root_pass}" 2> /dev/null
 privout "${root}_privkey.pem.asn1.txt" \
 openssl asn1parse -in "${root}_privkey.pem"
 # privout "${root}_privkey.pem.rsa.txt" \
@@ -215,9 +214,8 @@ echo "${code_pass}"
 # TODO: replace `-v2 aes-256-cbc` with `-scrypt` @ OpenSSL 1.1.0
 
 # PKCS #8 private key, encrypted, PEM format.
-openssl genrsa 4096 2> /dev/null | \
 privout "${code}_privkey.pem" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -passout "pass:${code_pass}"
+openssl genpkey -algorithm RSA -aes-256-cbc -pkeyopt rsa_keygen_bits:4096 -pass "pass:${code_pass}" 2> /dev/null
 privout "${code}_privkey.pem.asn1.txt" \
 openssl asn1parse -in "${code}_privkey.pem"
 # Do not dump a decrypted private key

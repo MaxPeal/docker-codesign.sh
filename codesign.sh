@@ -156,7 +156,8 @@ openssl asn1parse -inform DER -in "${root}_privatekey.der"
 
 # .crt is certificate (public key + subject + signature)
 openssl req -batch -verbose -new -sha256 -x509 -days 1826 -passin "pass:${root_pass}" -key "${root}_privatekey.pem" -out "${root}.crt" -config "${root}.csr.config"
-openssl x509 -in "${root}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${root}.crt.txt"
+openssl x509 -in "${root}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${root}.crt.x509.txt"
+openssl asn1parse -in "${root}.crt" > "${root}.crt.asn1.txt"
 
 # subordinates (don't give exactly the same subject data as above)
 
@@ -176,7 +177,9 @@ req_extensions = v3_req
 [v3_req]
 subjectKeyIdentifier = hash
 keyUsage = critical, digitalSignature
-extendedKeyUsage = critical, codeSigning, msCodeInd, msCodeCom
+# msCodeInd = Microsoft Individual Code Signing
+# msCodeCom = Microsoft Commercial Code Signing
+extendedKeyUsage = critical, codeSigning, msCodeInd
 
 [dn]
 #0.domainComponent = ${dc0}
@@ -194,10 +197,6 @@ echo '! Creating Code Signing Certificate...'
 readonly code_pass="$(pwgen -s 32 1)"
 privout "${code}.passwd" \
 echo "${code_pass}"
-
-openssl genrsa 4096 2> /dev/null | \
-privout "${code}_privatekey_2.der" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -outform DER -passout "pass:${code_pass}"
 
 # TODO: replace `-v2 aes-256-cbc` with `-scrypt` @ OpenSSL 1.1.0
 
@@ -219,10 +218,10 @@ openssl asn1parse -inform DER -in "${code}_privatekey.der"
 
 openssl rsa -passin "pass:${code_pass}" -in "${code}_privatekey.pem" -pubout > "${code}_publickey.pem"
 # Play some with the public key
-openssl rsa -pubin -in "${code}_publickey.pem" -text -noout > "${code}_publickey.pem.txt"
+openssl rsa -pubin -in "${code}_publickey.pem" -text -noout > "${code}_publickey.pem.rsa.txt"
 openssl asn1parse -in "${code}_publickey.pem" > "${code}_publickey.pem.asn1.txt"
 openssl rsa -pubin -in "${code}_publickey.pem" -outform DER > "${code}_publickey.der"
-openssl rsa -pubin -inform DER -in "${code}_publickey.der" -text -noout > "${code}_publickey.der.txt"
+openssl rsa -pubin -inform DER -in "${code}_publickey.der" -text -noout > "${code}_publickey.der.rsa.txt"
 openssl asn1parse -inform DER -in "${code}_publickey.der" > "${code}_publickey.der.asn1.txt"
 
 # .csr is certificate signing request
@@ -236,7 +235,8 @@ openssl x509 -req -sha256 -days 1095 \
    -extfile "${code}.csr.config" -extensions v3_req \
    -in "${code}.csr" -passin "pass:${root_pass}" \
    -CA "${root}.crt" -CAkey "${root}_privatekey.pem" -CAcreateserial -out "${code}.crt"
-openssl x509 -in "${code}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${code}.crt.txt"
+openssl x509 -in "${code}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${code}.crt.x509.txt"
+openssl asn1parse -in "${code}.crt" > "${code}.crt.asn1.txt"
 
 # You can include/exclude the root certificate by adding/removing option: `-chain -CAfile "${root}.crt"`
 # PKCS #12 .p12 is private key and certificate(-chain), encrypted
@@ -305,8 +305,8 @@ openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.pfx" -info -nodes -nokey
 
 privout "${code}.pvk" \
 openssl rsa -outform PVK -passout "pass:${code_pass}" -passin "pass:${code_pass}" -in "${code}_privatekey.pem"
-# "${code}.pvk.txt" should be identical to "${code}_privatekey.pem.rsa.txt"
-#   privout "${code}.pvk.txt" \
+# "${code}.pvk.rsa.txt" should be identical to "${code}_privatekey.pem.rsa.txt"
+#   privout "${code}.pvk.rsa.txt" \
 #   openssl rsa -inform PVK -passin "pass:${code_pass}" -in "${code}.pvk" -text -noout
 
 # .spc is certificate(-chain)
@@ -318,7 +318,7 @@ openssl rsa -outform PVK -passout "pass:${code_pass}" -passin "pass:${code_pass}
 #   rm -f "${temp}"
 
 openssl crl2pkcs7 -certfile "${code}.crt" -certfile "${root}.crt" -nocrl -outform DER -out "${code}.spc"
-openssl pkcs7 -inform DER -in "${code}.spc" -print_certs -text -noout > "${code}.spc.txt"
+openssl pkcs7 -inform DER -in "${code}.spc" -print_certs -text -noout > "${code}.spc.pkcs7.txt"
 openssl asn1parse -inform DER -in "${code}.spc" > "${code}.spc.asn1.txt"
 
 fi
@@ -352,9 +352,16 @@ if [ -f "${test}" ] ; then
 
    # - osslsigncode is not deterministic and it will also include all
    #   certificates from the .p12 file.
+   #   It will always use `Microsoft Individual Code Signing`, regardless
+   #   of the `extendedKeyUsage` value in the signing certificate. Can
+   #   switch to Commercial by passing `-comm` option.
    # - signtool appears to be deterministic and will exclude the root
    #   certificate. Root (and intermediate) cert(s) can be added via
    #   -ac option.
+   #   It will honor the Commercial/Individual info in `extendedKeyUsage`.
+   #   if both are specified, it will be Commercial,
+   #   if none, it will be Individual.
+   #   Ref: https://msdn.microsoft.com/en-us/library/ms537364.aspx#SignCode
 
    temp='./_code.p12'
    gpg --batch --passphrase "${encr_pass}" -o "${temp}" -d "${code}.p12.gpg"
@@ -430,7 +437,7 @@ if [ -f "${test}" ] ; then
       osslsigncode extract-signature \
          -in "${file}" -out "${file}.pkcs7" > /dev/null
       strip_signature_header "${file}.pkcs7"
-      openssl asn1parse -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.txt" || true
+      openssl asn1parse -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.asn1.txt" || true
 
       # Verify signature with osslsigncode
       if osslsigncode verify "${file}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null ; then

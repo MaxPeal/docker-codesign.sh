@@ -152,6 +152,11 @@ privout "${root}.password" \
 echo "${root_pass}"
 
 # TODO: replace `-v2 aes-256-cbc` with `-scrypt` @ OpenSSL 1.1.0
+# TODO: add `-strictpem` option to all `openssl asn1parse` commands
+#       where a PEM file is expected @ OpenSSL 1.1.0. Otherwise
+#       openssl would also process the BEGIN/END separators, leading
+#       to occasional processing errors.
+#          https://github.com/openssl/openssl/issues/1381#issuecomment-237095795
 
 # PKCS #8 private key, encrypted, PEM format.
 privout "${root}_privkey.pem" \

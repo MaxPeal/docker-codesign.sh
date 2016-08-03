@@ -432,7 +432,7 @@ if [ -f "${test}" ] ; then
          "${test%.exe}-signed-ms-2.exe"
 
       # Remove root CA:
-      #   certutil.exe -delstore -user 'Root' "$(openssl x509 -noout -subject -in "${root}.crt" | sed -n '/^subject/s/^.*CN=//p')"
+      #   certutil.exe -delStore -user 'Root' "$(openssl x509 -noout -subject -in "${root}.crt" | sed -n '/^subject/s/^.*CN=//p')"
 
       # signtool.exe is deterministic, unless we specify a timestamp server
       if diff -s --binary "${test%.exe}-signed-ms-1.exe" "${test%.exe}-signed-ms-2.exe" > /dev/null ; then

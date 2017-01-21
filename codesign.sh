@@ -22,6 +22,9 @@
 #   signtool.exe:
 #      part of Windows SDK
 
+# /usr/local/opt/openssl/bin/openssl list-cipher-algorithms
+# /usr/local/opt/openssl@1.1/bin/openssl list -cipher-algorithms
+
 # - .pem is a format, "Privacy Enhanced Mail", text, base64-encoded binary
 #           (with various twists, if encrypted)
 # - .der is a format, Distinguished Encoding Rules for ASN.1, binary
@@ -54,7 +57,7 @@ case "$(uname)" in
          }
       else
          openssl() {
-            /usr/local/opt/openssl/bin/openssl "$@"
+            /usr/local/opt/openssl@1.1/bin/openssl "$@"
          }
       fi
       tail() {
@@ -151,7 +154,6 @@ readonly root_pass="$(pwgen -s 32 1)"
 privout "${root}.password" \
 echo "${root_pass}"
 
-# TODO: replace `-v2 aes-256-cbc` with `-scrypt` @ OpenSSL 1.1.0
 # TODO: add `-strictpem` option to all `openssl asn1parse` commands
 #       where a PEM file is expected @ OpenSSL 1.1.0. Otherwise
 #       openssl would also process the BEGIN/END separators, leading
@@ -159,23 +161,30 @@ echo "${root_pass}"
 #          https://github.com/openssl/openssl/issues/1381#issuecomment-237095795
 
 # PKCS #8 private key, encrypted, PEM format.
-privout "${root}_privkey.pem" \
+privout "${root}_private.pem" \
 openssl genpkey -algorithm RSA -aes-256-cbc -pkeyopt rsa_keygen_bits:4096 -pass "pass:${root_pass}" 2> /dev/null
-privout "${root}_privkey.pem.asn1.txt" \
-openssl asn1parse -in "${root}_privkey.pem"
-# privout "${root}_privkey.pem.rsa.txt" \
-# openssl rsa       -in "${root}_privkey.pem" -passin "pass:${root_pass}" -text -noout
+privout "${root}_private.pem.asn1.txt" \
+openssl asn1parse -i -in "${root}_private.pem"
+# privout "${root}_private.pem.rsa.txt" \
+# openssl rsa       -in "${root}_private.pem" -passin "pass:${root_pass}" -text -noout
 
 # PKCS #8 private key, encrypted, DER format.
-privout "${root}_privkey.der" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -passin "pass:${root_pass}" -in "${root}_privkey.pem" -outform DER -passout "pass:${root_pass}"
-privout "${root}_privkey.der.asn1.txt" \
-openssl asn1parse -inform DER -in "${root}_privkey.der"
+privout "${root}_private.der" \
+openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${root_pass}" -in "${root}_private.pem" -outform DER -passout "pass:${root_pass}"
+privout "${root}_private.der.asn1.txt" \
+openssl asn1parse -i -inform DER -in "${root}_private.der"
+
+# PKCS #8 private key, encrypted, PEM format (reconvert from DER).
+privout "${root}_private2.pem" \
+openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${root_pass}" -in "${root}_private.pem" -outform PEM -passout "pass:${root_pass}"
+mv -f "${root}_private2.pem" "${root}_private.pem"
+privout "${root}_private.pem.asn1.txt" \
+openssl asn1parse -i -inform PEM -in "${root}_private.pem"
 
 # .crt is certificate (public key + subject + signature)
-openssl req -batch -verbose -new -sha256 -x509 -days 1826 -passin "pass:${root_pass}" -key "${root}_privkey.pem" -out "${root}.crt" -config "${root}.csr.config"
+openssl req -batch -verbose -new -sha256 -x509 -days 1826 -passin "pass:${root_pass}" -key "${root}_private.pem" -out "${root}.crt" -config "${root}.csr.config"
 openssl x509 -in "${root}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${root}.crt.x509.txt"
-openssl asn1parse -in "${root}.crt" > "${root}.crt.asn1.txt"
+openssl asn1parse -i -in "${root}.crt" > "${root}.crt.asn1.txt"
 
 # subordinates (don't give exactly the same subject data as above)
 
@@ -216,44 +225,49 @@ readonly code_pass="$(pwgen -s 32 1)"
 privout "${code}.password" \
 echo "${code_pass}"
 
-# TODO: replace `-v2 aes-256-cbc` with `-scrypt` @ OpenSSL 1.1.0
-
 # PKCS #8 private key, encrypted, PEM format.
-privout "${code}_privkey.pem" \
+privout "${code}_private.pem" \
 openssl genpkey -algorithm RSA -aes-256-cbc -pkeyopt rsa_keygen_bits:4096 -pass "pass:${code_pass}" 2> /dev/null
-privout "${code}_privkey.pem.asn1.txt" \
-openssl asn1parse -in "${code}_privkey.pem"
+privout "${code}_private.pem.asn1.txt" \
+openssl asn1parse -i -in "${code}_private.pem"
 # Do not dump a decrypted private key
-#   privout "${code}_privkey.pem.rsa.txt" \
-#   openssl rsa       -in "${code}_privkey.pem" -passin "pass:${code_pass}" -text -noout
+#   privout "${code}_private.pem.rsa.txt" \
+#   openssl rsa       -in "${code}_private.pem" -passin "pass:${code_pass}" -text -noout
 
 # PKCS #8 private key, encrypted, DER format.
-privout "${code}_privkey.der" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -passin "pass:${code_pass}" -in "${code}_privkey.pem" -outform DER -passout "pass:${code_pass}"
-privout "${code}_privkey.der.asn1.txt" \
-openssl asn1parse -inform DER -in "${code}_privkey.der"
+privout "${code}_private.der" \
+openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${code_pass}" -in "${code}_private.pem" -outform DER -passout "pass:${code_pass}"
+privout "${code}_private.der.asn1.txt" \
+openssl asn1parse -i -inform DER -in "${code}_private.der"
 
-openssl rsa -passin "pass:${code_pass}" -in "${code}_privkey.pem" -pubout > "${code}_pubkey.pem"
+# PKCS #8 private key, encrypted, PEM format (reconvert from DER).
+privout "${code}_private2.pem" \
+openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${code_pass}" -in "${code}_private.pem" -outform PEM -passout "pass:${code_pass}"
+mv -f "${code}_private2.pem" "${code}_private.pem"
+privout "${code}_private.pem.asn1.txt" \
+openssl asn1parse -i -inform PEM -in "${code}_private.pem"
+
+openssl rsa -passin "pass:${code_pass}" -in "${code}_private.pem" -pubout > "${code}_public.pem"
 # Play some with the public key
-openssl rsa -pubin -in "${code}_pubkey.pem" -text -noout > "${code}_pubkey.pem.rsa.txt"
-openssl asn1parse -in "${code}_pubkey.pem" > "${code}_pubkey.pem.asn1.txt"
-openssl rsa -pubin -in "${code}_pubkey.pem" -outform DER > "${code}_pubkey.der"
-openssl rsa -pubin -inform DER -in "${code}_pubkey.der" -text -noout > "${code}_pubkey.der.rsa.txt"
-openssl asn1parse -inform DER -in "${code}_pubkey.der" > "${code}_pubkey.der.asn1.txt"
+openssl rsa -pubin -in "${code}_public.pem" -text -noout > "${code}_public.pem.rsa.txt"
+openssl asn1parse -i -in "${code}_public.pem" > "${code}_public.pem.asn1.txt"
+openssl rsa -pubin -in "${code}_public.pem" -outform DER > "${code}_public.der"
+openssl rsa -pubin -inform DER -in "${code}_public.der" -text -noout > "${code}_public.der.rsa.txt"
+openssl asn1parse -i -inform DER -in "${code}_public.der" > "${code}_public.der.asn1.txt"
 
 # .csr is certificate signing request
-openssl req -batch -verbose -new -sha256 -passin "pass:${code_pass}" -key "${code}_privkey.pem" -out "${code}.csr" -config "${code}.csr.config"
+openssl req -batch -verbose -new -sha256 -passin "pass:${code_pass}" -key "${code}_private.pem" -out "${code}.csr" -config "${code}.csr.config"
 openssl req -batch -verbose -in "${code}.csr" -text -noout -nameopt utf8 > "${code}.csr.txt"
 openssl req -batch -verbose -in "${code}.csr" -outform DER > "${code}.csr.der"
-openssl asn1parse -in "${code}.csr" > "${code}.csr.asn1.txt"
+openssl asn1parse -i -in "${code}.csr" > "${code}.csr.asn1.txt"
 
 # .crt is certificate (public key + subject + signature)
 openssl x509 -req -sha256 -days 1095 \
    -extfile "${code}.csr.config" -extensions v3_req \
    -in "${code}.csr" -passin "pass:${root_pass}" \
-   -CA "${root}.crt" -CAkey "${root}_privkey.pem" -CAcreateserial -out "${code}.crt"
+   -CA "${root}.crt" -CAkey "${root}_private.pem" -CAcreateserial -out "${code}.crt"
 openssl x509 -in "${code}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${code}.crt.x509.txt"
-openssl asn1parse -in "${code}.crt" > "${code}.crt.asn1.txt"
+openssl asn1parse -i -in "${code}.crt" > "${code}.crt.asn1.txt"
 
 # You can include/exclude the root certificate by adding/removing option: `-chain -CAfile "${root}.crt"`
 # PKCS #12 .p12 is private key and certificate(-chain), encrypted
@@ -261,25 +275,34 @@ privout "${code}.p12" \
 openssl pkcs12 -export \
    -keypbe aes-256-cbc -certpbe aes-256-cbc -macalg sha256 \
    -passout "pass:${code_pass}" \
-   -passin "pass:${code_pass}" -inkey "${code}_privkey.pem" \
+   -passin "pass:${code_pass}" -inkey "${code}_private.pem" \
    -in "${code}.crt" \
    -chain -CAfile "${root}.crt"
 # `-nokeys` option avoids dumping unencrypted private key (kept the output private anyway)
 privall "${code}.p12.txt" \
 openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.p12" -info -nodes -nokeys
 privall "${code}.p12.asn1.txt" \
-openssl asn1parse -inform DER -in "${code}.p12"
+openssl asn1parse -i -inform DER -in "${code}.p12"
 
 # "$(apg -m 32 -x 32 -n 1 -M NCL)"
 readonly encr_pass="$(pwgen -s 32 1)"
 privout "${code}.p12.gpg.password" \
 echo "${encr_pass}"
 
-# Encrypted .p12.gpg for distribution
+# Encrypted .p12 for distribution (ASCII, binary)
 gpg --batch -v --yes --passphrase "${encr_pass}" \
-   --cipher-algo AES256 --digest-algo SHA512 \
-   --s2k-cipher-algo AES256 --s2k-digest-algo SHA512 \
-   --output "${code}.p12.gpg" -c "${code}.p12"
+   --cipher-algo aes256 --digest-algo sha512 \
+   --s2k-cipher-algo aes256 --s2k-digest-algo sha512 \
+   --set-filename '' \
+   --output "${code}.p12.asc" --armor \
+   -c "${code}.p12" \
+
+gpg --batch -v --yes --passphrase "${encr_pass}" \
+   --cipher-algo aes256 --digest-algo sha512 \
+   --s2k-cipher-algo aes256 --s2k-digest-algo sha512 \
+   --set-filename '' \
+   --output "${code}.p12.gpg" \
+   -c "${code}.p12"
 
 # Disable this, unsecure, no longer needed. Unless using Windows.
 if [ "${os}" = 'win' ] ; then
@@ -304,7 +327,7 @@ openssl pkcs12 -export \
    -keysig \
    -certpbe PBE-SHA1-3DES \
    -passout "pass:${code_pass}" \
-   -passin "pass:${code_pass}" -inkey "${code}_privkey.pem" \
+   -passin "pass:${code_pass}" -inkey "${code}_private.pem" \
    -in "${code}.crt" \
    -chain -CAfile "${root}.crt"
 # `-nokeys` will avoid dumping unencrypted private key (kept the output private anyway)
@@ -321,8 +344,8 @@ openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.pfx" -info -nodes -nokey
 #   openssl rsa -outform PVK -passout "pass:${code_pass}"
 
 privout "${code}.pvk" \
-openssl rsa -outform PVK -passout "pass:${code_pass}" -passin "pass:${code_pass}" -in "${code}_privkey.pem"
-# "${code}.pvk.rsa.txt" should be identical to "${code}_privkey.pem.rsa.txt"
+openssl rsa -outform PVK -passout "pass:${code_pass}" -passin "pass:${code_pass}" -in "${code}_private.pem"
+# "${code}.pvk.rsa.txt" should be identical to "${code}_private.pem.rsa.txt"
 #   privout "${code}.pvk.rsa.txt" \
 #   openssl rsa -inform PVK -passin "pass:${code_pass}" -in "${code}.pvk" -text -noout
 
@@ -336,7 +359,7 @@ openssl rsa -outform PVK -passout "pass:${code_pass}" -passin "pass:${code_pass}
 
 openssl crl2pkcs7 -certfile "${code}.crt" -certfile "${root}.crt" -nocrl -outform DER -out "${code}.spc"
 openssl pkcs7 -inform DER -in "${code}.spc" -print_certs -text -noout > "${code}.spc.pkcs7.txt"
-openssl asn1parse -inform DER -in "${code}.spc" > "${code}.spc.asn1.txt"
+openssl asn1parse -i -inform DER -in "${code}.spc" > "${code}.spc.asn1.txt"
 
 fi
 
@@ -378,10 +401,10 @@ if [ -f "${test}" ] ; then
    #   It will honor the Commercial/Individual info in `extendedKeyUsage`.
    #   if both are specified, it will be Commercial,
    #   if none, it will be Individual.
-   #   Ref: https://msdn.microsoft.com/en-us/library/ms537364.aspx#SignCode
+   #   Ref: https://msdn.microsoft.com/library/ms537364#SignCode
 
    temp='./_code.p12'
-   gpg --batch --passphrase "${encr_pass}" -o "${temp}" -d "${code}.p12.gpg"
+   gpg --batch --passphrase "${encr_pass}" -o "${temp}" -d "${code}.p12.asc"
 
    osslsigncode sign -h sha256 \
       -pkcs12 "${temp}" -pass "${code_pass}" \
@@ -457,7 +480,7 @@ if [ -f "${test}" ] ; then
       osslsigncode extract-signature \
          -in "${file}" -out "${file}.pkcs7" > /dev/null
       strip_signature_header "${file}.pkcs7"
-      openssl asn1parse -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.asn1.txt" || true
+      openssl asn1parse -i -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.asn1.txt" || true
 
       # Verify signature with osslsigncode
       if osslsigncode verify "${file}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null ; then

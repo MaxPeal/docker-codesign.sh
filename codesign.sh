@@ -50,7 +50,7 @@ case "$(uname)" in
    *Darwin*)
       # Need to make this a function instead of an `alias`
       # to make it work as expected when passed to `privout`/`privall`
-      if [ -f ./openssl ] ; then
+      if [ -f ./openssl ]; then
          # Use local copy if present
          openssl() {
             ./openssl "$@"
@@ -63,7 +63,7 @@ case "$(uname)" in
       tail() {
          gtail "$@"
       }
-      if [ -f ./osslsigncode ] ; then
+      if [ -f ./osslsigncode ]; then
          # Use local copy if present
          osslsigncode() {
             ./osslsigncode "$@"
@@ -74,7 +74,7 @@ case "$(uname)" in
       # To find osslsigncode
       PATH=/mingw64/bin:${PATH}
       readonly os='win';;
-   linux*)
+   Linux*)
       readonly os='linux';;
 esac
 
@@ -305,7 +305,7 @@ gpg --batch -v --yes --passphrase "${encr_pass}" \
    -c "${code}.p12"
 
 # Disable this, unsecure, no longer needed. Unless using Windows.
-if [ "${os}" = 'win' ] ; then
+if [ "${os}" = 'win' ]; then
 
 echo '! Create Microsoft-specific Code Signing files...'
 
@@ -339,8 +339,8 @@ openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.pfx" -info -nodes -nokey
 #   encryption (-pvk-strong), which is still weak crypto.
 
 # Same as below, but using the .p12 as the input:
-#   openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.p12" -nocerts -nodes | \
-#   privout "${code}.pvk" \
+#   openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.p12" -nocerts -nodes \
+#   | privout "${code}.pvk" \
 #   openssl rsa -outform PVK -passout "pass:${code_pass}"
 
 privout "${code}.pvk" \
@@ -369,9 +369,9 @@ echo '! Test signing an executable...'
 
 # Recreate minimal (but already runnable) PE executable.
 # Dump created using:
-#   curl http://www.phreedom.org/research/tinype/tiny.c.1024/tiny.exe | \
-#   gzip -cn9 test.exe | \
-#   openssl base64 -e > mk.sh
+#   curl http://www.phreedom.org/research/tinype/tiny.c.1024/tiny.exe \
+#   | gzip -cn9 test.exe \
+#   | openssl base64 -e > mk.sh
 cat << EOF | openssl base64 -d | gzip -cd > test.exe
 H4sIAAAAAAACA/ONmsDAzMDAwALE//8zMOxggAAHBsJgAxDzye/iY9jCeVZxB6PP
 WcWQjMxihYKi/PSixFyF5MS8vPwShaRUhaLSPIXMPAUX/2CF3PyUVD1eXi4VqBk/
@@ -382,7 +382,7 @@ EOF
 
 readonly test="${1:-test.exe}"
 
-if [ -f "${test}" ] ; then
+if [ -f "${test}" ]; then
 
    find . -name "${test%.exe}-signed*.exe" -delete
 
@@ -424,7 +424,7 @@ if [ -f "${test}" ] ; then
    # osslsigncode is non-deterministic, even if not specifying a timestamp
    # server, because openssl PKCS #7 code will unconditionally include the
    # local timestamp inside a `signingTime` PKCS #7 record.
-   if diff -s --binary "${test%.exe}-signed-ossl-1.exe" "${test%.exe}-signed-ossl-2.exe" > /dev/null ; then
+   if diff -s --binary "${test%.exe}-signed-ossl-1.exe" "${test%.exe}-signed-ossl-2.exe" > /dev/null; then
       echo '! Info: osslsigncode code signing: deterministic'
    else
       echo '! Info: osslsigncode code signing: non-deterministic'
@@ -432,7 +432,7 @@ if [ -f "${test}" ] ; then
 
    # using signtool.exe
 
-   if [ "${os}" = 'win' ] ; then
+   if [ "${os}" = 'win' ]; then
 
       # Root CA may need to be installed as a "Trust Root Certificate".
       # It has to be confirmed on a GUI dialog:
@@ -458,20 +458,20 @@ if [ -f "${test}" ] ; then
       #   certutil.exe -delStore -user 'Root' "$(openssl x509 -noout -subject -in "${root}.crt" | sed -n '/^subject/s/^.*CN=//p')"
 
       # signtool.exe is deterministic, unless we specify a timestamp server
-      if diff -s --binary "${test%.exe}-signed-ms-1.exe" "${test%.exe}-signed-ms-2.exe" > /dev/null ; then
+      if diff -s --binary "${test%.exe}-signed-ms-1.exe" "${test%.exe}-signed-ms-2.exe" > /dev/null; then
          echo '! Info: signtool.exe code signing: deterministic'
       else
          echo '! Info: signtool.exe code signing: non-deterministic'
       fi
    fi
 
-   if osslsigncode verify "${test}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null ; then
+   if osslsigncode verify "${test}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null; then
       echo "! Fail: unsigned exe passes: ${test}"
    else
       echo "! OK: unsigned exe fails: ${test}"
    fi
 
-   for file in ${test%.exe}-*.exe ; do
+   for file in ${test%.exe}-*.exe; do
 
       # TODO: Replace `strip_signature_header` with `-pem` osslsigncode option
       #       @ osslsigncode above 1.7.1
@@ -483,18 +483,18 @@ if [ -f "${test}" ] ; then
       openssl asn1parse -i -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.asn1.txt" || true
 
       # Verify signature with osslsigncode
-      if osslsigncode verify "${file}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null ; then
+      if osslsigncode verify "${file}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null; then
          echo "! OK: signed exe passes 'osslsigncode verify': ${file}"
       else
          echo "! Fail: signed exe fails 'osslsigncode verify': ${file}"
       fi
 
-      if [ "${os}" = 'win' ] ; then
+      if [ "${os}" = 'win' ]; then
 
          # TODO: verify using `signtool.exe verify`
 
          # Verify signature with sigcheck
-         if sigcheck64.exe -nobanner -accepteula "${file}" ; then
+         if sigcheck64.exe -nobanner -accepteula "${file}"; then
             # If we haven't specified a timestamp server when code signing,
             # sigcheck will report the _current time_ as "Signing date".
             echo "! OK: signed exe passes 'sigcheck64.exe': ${file}"

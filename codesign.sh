@@ -1,6 +1,6 @@
-#!/bin/sh -e
+#!/bin/sh
 
-# To the extent possible under law, Viktor Szakats (vszakats.net)
+# To the extent possible under law, Viktor Szakats (vsz.me)
 # has waived all copyright and related or neighboring rights to this
 # script.
 # CC0 - https://creativecommons.org/publicdomain/zero/1.0/
@@ -12,18 +12,15 @@
 # verify those signature using osslsigncode and sigcheck.exe (on Windows only).
 
 # Requires:
-#   OpenSSL 1.x, gpg, pwgen (or apg), osslsigncode, GNU tail
+#   openssl 1.1.x, gpg, osslsigncode 2.1.0, GNU tail, base58
 # Mac:
-#   brew install openssl gnupg pwgen osslsigncode apg coreutils
+#   brew install openssl gnupg osslsigncode coreutils
 # Win:
-#   pacman -S openssl gnupg pwgen mingw-w64-{i686,x86_64}-osslsigncode
+#   pacman --sync openssl gnupg mingw-w64-{i686,x86_64}-osslsigncode
 #   sigcheck64.exe:
-#      curl -O https://live.sysinternals.com/tools/sigcheck64.exe
+#     curl --user-agent '' --remote-name --remote-time --xattr https://live.sysinternals.com/tools/sigcheck64.exe
 #   signtool.exe:
-#      part of Windows SDK
-
-# /usr/local/opt/openssl/bin/openssl list-cipher-algorithms
-# /usr/local/opt/openssl@1.1/bin/openssl list -cipher-algorithms
+#     part of Windows SDK
 
 # - .pem is a format, "Privacy Enhanced Mail", text, base64-encoded binary
 #           (with various twists, if encrypted)
@@ -47,85 +44,73 @@
 #               exist in one-liner OpenSSH key format RFC 4251.
 
 case "$(uname)" in
-   *Darwin*)
-      # Need to make this a function instead of an `alias`
-      # to make it work as expected when passed to `privout`/`privall`
-      if [ -f ./openssl ]; then
-         # Use local copy if present
-         openssl() {
-            ./openssl "$@"
-         }
-      else
-         openssl() {
-            /usr/local/opt/openssl@1.1/bin/openssl "$@"
-         }
-      fi
-      tail() {
-         gtail "$@"
-      }
-      if [ -f ./osslsigncode ]; then
-         # Use local copy if present
-         osslsigncode() {
-            ./osslsigncode "$@"
-         }
-      fi
-      readonly os='mac';;
-   *_NT*)
-      # To find osslsigncode
-      PATH=/mingw64/bin:${PATH}
-      readonly os='win';;
-   Linux*)
-      readonly os='linux';;
+  *Darwin*)
+    alias openssl=/usr/local/opt/openssl@1.1/bin/openssl
+    readonly os='mac';;
+  *_NT*)
+    # To find osslsigncode
+    PATH="/mingw64/bin:${PATH}"
+    readonly os='win';;
+  Linux*)
+    readonly os='linux';;
 esac
 
 # Redirect stdout securely to non-world-readable files
 privout() {
-   o="$1"; rm -f "$o"; touch "$o"; chmod 0600 "$o"; shift
-   (
-      "$@"
-   ) >> "$o"
+  o="$1"; rm -f "$o"; install -m 600 /dev/null "$o"; shift
+  (
+    "$@"
+  ) >> "$o"
 }
 
-# Redirect all output securely to non-world-readable files
-privall() {
-   o="$1"; rm -f "$o"; touch "$o"; chmod 0600 "$o"; shift
-   (
-      "$@"
-   ) >> "$o" 2>&1
-}
+readonly base="$1"
+readonly revi="$2"
 
-# Extract PKCS #7 blob from MS Authenticode signature
-#    https://www.cs.auckland.ac.nz/~pgut001/pubs/authenticode.txt
-strip_signature_header() {
-   tail -c +9 "$1" > "$1.truncated" && mv -f "$1.truncated" "$1"
-}
+readonly compname="${base}"
 
-readonly base='test_'
+[ "${base}" ] || exit 1
 
-readonly dc0='com'
-readonly dc1='example'
-readonly country='NET'
-readonly location='Earth'
-readonly compname='Example'
-
-echo "OpenSSL      $(openssl version 2> /dev/null | grep -Eo -m 1 ' [0-9]+.[0-9]+.[0-9a-z]+')"
-echo "osslsigncode $(osslsigncode -v 2> /dev/null | grep -Eo -m 1 ' [0-9]+.[0-9]+.[0-9]+')"
+echo "OpenSSL      $(openssl version 2>/dev/null | grep -Eo -m 1 ' [0-9]+.[0-9]+.[0-9a-z]+')"
+echo "osslsigncode $(osslsigncode -v 2>/dev/null | grep -Eo -m 1 ' [0-9]+.[0-9]+.[0-9]+')"
 
 # C  = Country
 # L  = Locality
 # ST = State
 # O  = Organization
-# OU = Organizational Unit
 # CN = Common Name
 
-readonly root="${base}CA"
+readonly prfx="${base}_${revi}-"
+readonly root="${prfx}ca"
 
 echo '! Creating self-signed Root Certificate...'
 
 # https://pki-tutorial.readthedocs.io/en/latest/simple/root-ca.conf.html
 # https://en.wikipedia.org/wiki/X.509
 
-cat << EOF > "${root}.csr.config"
+
+if [ "$3" = 'rsa' ]; then
+  cryptopt='-algorithm RSA -pkeyopt rsa_keygen_bits:4096'
+else
+  # TODO:
+  #   https://github.com/openssl/openssl/pull/9223
+  #     -pkeyopt ecdsa_nonce_type:deterministic
+  cryptopt='-algorithm EC  -pkeyopt ec_paramgen_curve:secp384r1 -pkeyopt ec_param_enc:named_curve'
+fi
+
+# "$(pwgen --secure 40 1)"
+readonly root_pass="$(openssl rand 32 | base58)"
+privout "${root}.password" \
+printf '%s' "${root_pass}"
+
+# PKCS #8 private key, encrypted, PEM format.
+# shellcheck disable=SC2086
+openssl genpkey ${cryptopt} -aes-256-cbc -pass "pass:${root_pass}" -out "${root}-private.pem" 2>/dev/null
+privout "${root}-private.pem.asn1.txt" \
+openssl asn1parse -i -in "${root}-private.pem"
+# openssl pkey -in "${root}-private.pem" -passin "pass:${root_pass}" -text -noout -out "${root}-private.pem.txt"
+
+# -cert.pem is certificate (public key + subject + signature)
+openssl req -batch -verbose -new -sha256 -x509 -days 1826 -passin "pass:${root_pass}" -key "${root}-private.pem" -out "${root}-cert.pem" -config - << EOF
 [req]
 encrypt_key = yes
 prompt = no
@@ -136,63 +121,22 @@ x509_extensions = v3_ca
 
 [v3_ca]
 subjectKeyIdentifier = hash
-basicConstraints = CA:TRUE
+basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
 
 [dn]
-#0.domainComponent = ${dc0}
-#1.domainComponent = ${dc1}
-#C = ${country}
-#L = ${location}
-O  = ${compname}
-OU = ${compname} Root CA
-CN = ${compname} Root CA
+CN = ${compname} Root CA ${revi}
 EOF
+openssl x509 -in "${root}-cert.pem" -text -noout -nameopt utf8 -sha256 -fingerprint > "${root}-cert.pem.x509.txt"
+openssl asn1parse -i -in "${root}-cert.pem" > "${root}-cert.pem.asn1.txt"
 
-# "$(apg -m 32 -x 32 -n 1 -M NCL)"
-readonly root_pass="$(pwgen -s 32 1)"
-privout "${root}.password" \
-echo "${root_pass}"
-
-# TODO: add `-strictpem` option to all `openssl asn1parse` commands
-#       where a PEM file is expected @ OpenSSL 1.1.0. Otherwise
-#       openssl would also process the BEGIN/END separators, leading
-#       to occasional processing errors.
-#          https://github.com/openssl/openssl/issues/1381#issuecomment-237095795
-
-# PKCS #8 private key, encrypted, PEM format.
-privout "${root}_private.pem" \
-openssl genpkey -algorithm RSA -aes-256-cbc -pkeyopt rsa_keygen_bits:4096 -pass "pass:${root_pass}" 2> /dev/null
-privout "${root}_private.pem.asn1.txt" \
-openssl asn1parse -i -in "${root}_private.pem"
-# privout "${root}_private.pem.rsa.txt" \
-# openssl rsa       -in "${root}_private.pem" -passin "pass:${root_pass}" -text -noout
-
-# PKCS #8 private key, encrypted, DER format.
-privout "${root}_private.der" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${root_pass}" -in "${root}_private.pem" -outform DER -passout "pass:${root_pass}"
-privout "${root}_private.der.asn1.txt" \
-openssl asn1parse -i -inform DER -in "${root}_private.der"
-
-# PKCS #8 private key, encrypted, PEM format (reconvert from DER).
-privout "${root}_private2.pem" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${root_pass}" -in "${root}_private.pem" -outform PEM -passout "pass:${root_pass}"
-mv -f "${root}_private2.pem" "${root}_private.pem"
-privout "${root}_private.pem.asn1.txt" \
-openssl asn1parse -i -inform PEM -in "${root}_private.pem"
-
-# .crt is certificate (public key + subject + signature)
-openssl req -batch -verbose -new -sha256 -x509 -days 1826 -passin "pass:${root_pass}" -key "${root}_private.pem" -out "${root}.crt" -config "${root}.csr.config"
-openssl x509 -in "${root}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${root}.crt.x509.txt"
-openssl asn1parse -i -in "${root}.crt" > "${root}.crt.asn1.txt"
-
-# subordinates (don't give exactly the same subject data as above)
+# subordinates (don't set exactly the same 'subject' data as above)
 
 # subordinate #1: code signing
 
-readonly code="${base}code"
+readonly code="${prfx}code"
 
-cat << EOF > "${code}.csr.config"
+cat << EOF > "${code}-csr.config"
 [req]
 encrypt_key = yes
 prompt = no
@@ -209,170 +153,92 @@ keyUsage = critical, digitalSignature
 extendedKeyUsage = critical, codeSigning, msCodeInd
 
 [dn]
-#0.domainComponent = ${dc0}
-#1.domainComponent = ${dc1}
-#C = ${country}
-#L = ${location}
-O  = ${compname}
-OU = ${compname} Code Signing Authority
 CN = ${compname} Code Signing Authority
 EOF
 
 echo '! Creating Code Signing Certificate...'
 
-# "$(apg -m 32 -x 32 -n 1 -M NCL)"
-readonly code_pass="$(pwgen -s 32 1)"
+# "$(pwgen --secure 40 1)"
+readonly code_pass="$(openssl rand 32 | base58)"
 privout "${code}.password" \
-echo "${code_pass}"
+printf '%s' "${code_pass}"
 
 # PKCS #8 private key, encrypted, PEM format.
-privout "${code}_private.pem" \
-openssl genpkey -algorithm RSA -aes-256-cbc -pkeyopt rsa_keygen_bits:4096 -pass "pass:${code_pass}" 2> /dev/null
-privout "${code}_private.pem.asn1.txt" \
-openssl asn1parse -i -in "${code}_private.pem"
+# shellcheck disable=SC2086
+openssl genpkey ${cryptopt} -aes-256-cbc -pass "pass:${code_pass}" -out "${code}-private.pem" 2>/dev/null
+privout "${code}-private.pem.asn1.txt" \
+openssl asn1parse -i -in "${code}-private.pem"
 # Do not dump a decrypted private key
-#   privout "${code}_private.pem.rsa.txt" \
-#   openssl rsa       -in "${code}_private.pem" -passin "pass:${code_pass}" -text -noout
+# openssl pkey -in "${code}-private.pem" -passin "pass:${code_pass}" -text -noout -out "${code}-private.pem.txt"
 
-# PKCS #8 private key, encrypted, DER format.
-privout "${code}_private.der" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${code_pass}" -in "${code}_private.pem" -outform DER -passout "pass:${code_pass}"
-privout "${code}_private.der.asn1.txt" \
-openssl asn1parse -i -inform DER -in "${code}_private.der"
-
-# PKCS #8 private key, encrypted, PEM format (reconvert from DER).
-privout "${code}_private2.pem" \
-openssl pkcs8 -topk8 -v2 aes-256-cbc -scrypt -passin "pass:${code_pass}" -in "${code}_private.pem" -outform PEM -passout "pass:${code_pass}"
-mv -f "${code}_private2.pem" "${code}_private.pem"
-privout "${code}_private.pem.asn1.txt" \
-openssl asn1parse -i -inform PEM -in "${code}_private.pem"
-
-openssl rsa -passin "pass:${code_pass}" -in "${code}_private.pem" -pubout > "${code}_public.pem"
+openssl pkey -passin "pass:${code_pass}" -in "${code}-private.pem" -pubout > "${code}-public.pem"
 # Play some with the public key
-openssl rsa -pubin -in "${code}_public.pem" -text -noout > "${code}_public.pem.rsa.txt"
-openssl asn1parse -i -in "${code}_public.pem" > "${code}_public.pem.asn1.txt"
-openssl rsa -pubin -in "${code}_public.pem" -outform DER > "${code}_public.der"
-openssl rsa -pubin -inform DER -in "${code}_public.der" -text -noout > "${code}_public.der.rsa.txt"
-openssl asn1parse -i -inform DER -in "${code}_public.der" > "${code}_public.der.asn1.txt"
+openssl pkey -pubin -in "${code}-public.pem" -text -noout > "${code}-public.pem.txt"
+openssl asn1parse -i -in "${code}-public.pem" > "${code}-public.pem.asn1.txt"
 
-# .csr is certificate signing request
-openssl req -batch -verbose -new -sha256 -passin "pass:${code_pass}" -key "${code}_private.pem" -out "${code}.csr" -config "${code}.csr.config"
-openssl req -batch -verbose -in "${code}.csr" -text -noout -nameopt utf8 > "${code}.csr.txt"
-openssl req -batch -verbose -in "${code}.csr" -outform DER > "${code}.csr.der"
-openssl asn1parse -i -in "${code}.csr" > "${code}.csr.asn1.txt"
+# -csr.pem is certificate signing request
+openssl req -batch -verbose -new -sha256 -passin "pass:${code_pass}" -key "${code}-private.pem" -out "${code}-csr.pem" -config "${code}-csr.config"
+openssl req -batch -verbose -in "${code}-csr.pem" -text -noout -nameopt utf8 > "${code}-csr.pem.txt"
+openssl asn1parse -i -in "${code}-csr.pem" > "${code}-csr.pem.asn1.txt"
 
-# .crt is certificate (public key + subject + signature)
+# -cert.pem is certificate (public key + subject + signature)
 openssl x509 -req -sha256 -days 1095 \
-   -extfile "${code}.csr.config" -extensions v3_req \
-   -in "${code}.csr" -passin "pass:${root_pass}" \
-   -CA "${root}.crt" -CAkey "${root}_private.pem" -CAcreateserial -out "${code}.crt"
-openssl x509 -in "${code}.crt" -text -noout -nameopt utf8 -sha256 -fingerprint > "${code}.crt.x509.txt"
-openssl asn1parse -i -in "${code}.crt" > "${code}.crt.asn1.txt"
+  -extfile "${code}-csr.config" -extensions v3_req \
+  -in "${code}-csr.pem" -passin "pass:${root_pass}" \
+  -CA "${root}-cert.pem" -CAkey "${root}-private.pem" -CAcreateserial -out "${code}-cert.pem"
+openssl x509 -in "${code}-cert.pem" -text -noout -nameopt utf8 -sha256 -fingerprint > "${code}-cert.pem.x509.txt"
+openssl asn1parse -i -in "${code}-cert.pem" > "${code}-cert.pem.asn1.txt"
 
-# You can include/exclude the root certificate by adding/removing option: `-chain -CAfile "${root}.crt"`
+# You can include/exclude the root certificate by adding/removing option: `-chain -CAfile "${root}-cert.pem"`
 # PKCS #12 .p12 is private key and certificate(-chain), encrypted
-privout "${code}.p12" \
 openssl pkcs12 -export \
-   -keypbe aes-256-cbc -certpbe aes-256-cbc -macalg sha256 \
-   -passout "pass:${code_pass}" \
-   -passin "pass:${code_pass}" -inkey "${code}_private.pem" \
-   -in "${code}.crt" \
-   -chain -CAfile "${root}.crt"
+  -keypbe aes-256-cbc -certpbe aes-256-cbc -macalg sha256 \
+  -passout "pass:${code_pass}" \
+  -passin "pass:${code_pass}" -inkey "${code}-private.pem" \
+  -in "${code}-cert.pem" \
+  -chain -CAfile "${root}-cert.pem" \
+  -out "${code}.p12"
 # `-nokeys` option avoids dumping unencrypted private key (kept the output private anyway)
-privall "${code}.p12.txt" \
-openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.p12" -info -nodes -nokeys
-privall "${code}.p12.asn1.txt" \
+openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.p12" -info -nodes -nokeys -out "${code}.p12.txt"
+privout "${code}.p12.asn1.txt" \
 openssl asn1parse -i -inform DER -in "${code}.p12"
 
-# "$(apg -m 32 -x 32 -n 1 -M NCL)"
-readonly encr_pass="$(pwgen -s 32 1)"
+# "$(pwgen --secure 40 1)"
+# Make sure password does not start with '/'. Some tools can mistake it for
+# an option.
+readonly encr_pass="$(openssl rand 32 | base58)"
 privout "${code}.p12.gpg.password" \
-echo "${encr_pass}"
+printf '%s' "${encr_pass}"
 
 # Encrypted .p12 for distribution (ASCII, binary)
-gpg --batch -v --yes --passphrase "${encr_pass}" \
-   --cipher-algo aes256 --digest-algo sha512 \
-   --s2k-cipher-algo aes256 --s2k-digest-algo sha512 \
-   --set-filename '' \
-   --output "${code}.p12.asc" --armor \
-   -c "${code}.p12" \
+gpg --batch --verbose --yes --passphrase "${encr_pass}" \
+  --cipher-algo aes256 --digest-algo sha512 \
+  --s2k-cipher-algo aes256 --s2k-digest-algo sha512 \
+  --compress-algo none \
+  --set-filename '' \
+  --output "${code}.p12.asc" --armor \
+  --symmetric "${code}.p12" \
 
-gpg --batch -v --yes --passphrase "${encr_pass}" \
-   --cipher-algo aes256 --digest-algo sha512 \
-   --s2k-cipher-algo aes256 --s2k-digest-algo sha512 \
-   --set-filename '' \
-   --output "${code}.p12.gpg" \
-   -c "${code}.p12"
-
-# Disable this, unsecure, no longer needed. Unless using Windows.
-if [ "${os}" = 'win' ]; then
-
-echo '! Create Microsoft-specific Code Signing files...'
-
-# .pfx is same as .p12 except in this one we use weak crypto to make it work
-#         with signtool.exe
-#
-# Microsoft signtool.exe (as of Windows 10 SDK) and certmgr.msc UI will report
-# "wrong password" if any of the modern encryption parameters is used.
-# This is the best supported crypto: SHA1 + 3DES CBC (Iteration 2048)
-#
-# `-descert` option is the same as `-certpbe PBE-SHA1-3DES`
-#   (casing is significant with the latter flavor)
-# `-keysig` is optional, will limit this file for signing only.
-#
-# Reference:
-#    https://www.mail-archive.com/openssl-users%40openssl.org/msg75443.html
-privout "${code}.pfx" \
-openssl pkcs12 -export \
-   -keysig \
-   -certpbe PBE-SHA1-3DES \
-   -passout "pass:${code_pass}" \
-   -passin "pass:${code_pass}" -inkey "${code}_private.pem" \
-   -in "${code}.crt" \
-   -chain -CAfile "${root}.crt"
-# `-nokeys` will avoid dumping unencrypted private key (kept the output private anyway)
-privall "${code}.pfx.txt" \
-openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.pfx" -info -nodes -nokeys
-
-# .pvk is private key, encrypted
-#   Requires OpenSSL 1.0.1 or upper to use the strongest available
-#   encryption (-pvk-strong), which is still weak crypto.
-
-# Same as below, but using the .p12 as the input:
-#   openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.p12" -nocerts -nodes \
-#   | privout "${code}.pvk" \
-#   openssl rsa -outform PVK -passout "pass:${code_pass}"
-
-privout "${code}.pvk" \
-openssl rsa -outform PVK -passout "pass:${code_pass}" -passin "pass:${code_pass}" -in "${code}_private.pem"
-# "${code}.pvk.rsa.txt" should be identical to "${code}_private.pem.rsa.txt"
-#   privout "${code}.pvk.rsa.txt" \
-#   openssl rsa -inform PVK -passin "pass:${code_pass}" -in "${code}.pvk" -text -noout
-
-# .spc is certificate(-chain)
-
-# Same as below, but using the .p12 as the input:
-#   temp="$(mktemp -t X)"
-#   openssl pkcs12 -passin "pass:${code_pass}" -in "${code}.p12" -nokeys > "${temp}"
-#   openssl crl2pkcs7 -nocrl -certfile "${temp}" -outform DER -out "${code}.spc"
-#   rm -f "${temp}"
-
-openssl crl2pkcs7 -certfile "${code}.crt" -certfile "${root}.crt" -nocrl -outform DER -out "${code}.spc"
-openssl pkcs7 -inform DER -in "${code}.spc" -print_certs -text -noout > "${code}.spc.pkcs7.txt"
-openssl asn1parse -i -inform DER -in "${code}.spc" > "${code}.spc.asn1.txt"
-
-fi
+gpg --batch --verbose --yes --passphrase "${encr_pass}" \
+  --cipher-algo aes256 --digest-algo sha512 \
+  --s2k-cipher-algo aes256 --s2k-digest-algo sha512 \
+  --compress-algo none \
+  --set-filename '' \
+  --output "${code}.p12.gpg" \
+  --symmetric "${code}.p12"
 
 echo '! Test signing an executable...'
 
 # Code signing for Windows
 
-# Recreate minimal (but already runnable) PE executable.
+# Recreate minimal (runnable) PE executable.
 # Dump created using:
-#   curl http://www.phreedom.org/research/tinype/tiny.c.1024/tiny.exe \
-#   | gzip -cn9 test.exe \
+#   curl --user-agent '' --doh-url "${MY_DOH_NUL}" \
+#     -L https://web.archive.org/web/phreedom.org/research/tinype/tiny.c.1024/tiny.exe \
+#   | gzip -n9 \
 #   | openssl base64 -e > mk.sh
-cat << EOF | openssl base64 -d | gzip -cd > test.exe
+#   # SHA-256: 9d5efce48ed68dcb4caaa7fbecaf47ce2cab0a023afc6ceed682d1d532823773
+cat << EOF | openssl base64 -d | gzip -d > test.exe
 H4sIAAAAAAACA/ONmsDAzMDAwALE//8zMOxggAAHBsJgAxDzye/iY9jCeVZxB6PP
 WcWQjMxihYKi/PSixFyF5MS8vPwShaRUhaLSPIXMPAUX/2CF3PyUVD1eXi4VqBk/
 dYtu7vWR6YLhWV2FXXvAdAqYDspMzgCJw+wMcGVg8GFkZMjf6+oKE3vAwMzIzcjB
@@ -380,129 +246,139 @@ wMCE5DgBKFaA+gbEZoL4k4EBQYPlofog0gIQtXAaTg0o0CtJrSiBuRvqFxT/QryS
 QKq5WVoRhxlGwYgFAPfKgYsABAAA
 EOF
 
-readonly test="${1:-test.exe}"
+readonly test="${4:-test.exe}"
 
 if [ -f "${test}" ]; then
 
-   find . -name "${test%.exe}-signed*.exe" -delete
+  find . -name "${test%.exe}-signed*.exe" -delete
 
-   readonly ts='http://timestamp.digicert.com'
+  readonly ts='https://tsa.swisssign.net'
 
-   # using osslsigncode
+  # using osslsigncode
 
-   # - osslsigncode is not deterministic and it will also include all
-   #   certificates from the .p12 file.
-   #   It will always use `Microsoft Individual Code Signing`, regardless
-   #   of the `extendedKeyUsage` value in the signing certificate. Can
-   #   switch to Commercial by passing `-comm` option.
-   # - signtool appears to be deterministic and will exclude the root
-   #   certificate. Root (and intermediate) cert(s) can be added via
-   #   -ac option.
-   #   It will honor the Commercial/Individual info in `extendedKeyUsage`.
-   #   if both are specified, it will be Commercial,
-   #   if none, it will be Individual.
-   #   Ref: https://msdn.microsoft.com/library/ms537364#SignCode
+  # - osslsigncode is not deterministic and it will also include all
+  #   certificates from the .p12 file.
+  #   It will always use `Microsoft Individual Code Signing`, regardless
+  #   of the `extendedKeyUsage` value in the signing certificate. Can
+  #   switch to Commercial by passing `-comm` option.
+  # - signtool appears to be deterministic and will exclude the root
+  #   certificate. Root (and intermediate) cert(s) can be added via
+  #   -ac option.
+  #   It will honor the Commercial/Individual info in `extendedKeyUsage`.
+  #   if both are specified, it will be Commercial,
+  #   if none, it will be Individual.
+  #   Ref: https://docs.microsoft.com/previous-versions/windows/internet-explorer/ie-developer/platform-apis/ms537364(v=vs.85)#signcode
 
-   temp='./_code.p12'
-   gpg --batch --passphrase "${encr_pass}" -o "${temp}" -d "${code}.p12.asc"
+  temp='./_code.p12'
+  rm -f "${temp}"
+  gpg --batch --passphrase "${encr_pass}" --output "${temp}" --decrypt "${code}.p12.asc"
 
-   osslsigncode sign -h sha256 \
-      -pkcs12 "${temp}" -pass "${code_pass}" \
-      -ts "${ts}" \
-      -in "${test}" -out "${test%.exe}-signed-ossl-ts-1.exe"
+  case "$(uname)" in
+    Darwin*|*BSD) unixts="$(TZ=UTC stat -f '%m'       "${test}")";;
+    *)            unixts="$(TZ=UTC stat --format '%Y' "${test}")";;
+  esac
 
-   osslsigncode sign -h sha256 \
-      -pkcs12 "${temp}" -pass "${code_pass}" \
-      -in "${test}" -out "${test%.exe}-signed-ossl-1.exe"
-   sleep 3
-   osslsigncode sign -h sha256 \
-      -pkcs12 "${temp}" -pass "${code_pass}" \
-      -in "${test}" -out "${test%.exe}-signed-ossl-2.exe"
+  osslsigncode sign -h sha256 \
+    -in "${test}" -out "${test%.exe}-signed-ossl-ts-1.exe" \
+    -ts "${ts}" \
+    -pkcs12 "${temp}" -pass "${code_pass}"
 
-   rm -f "${temp}"
+  osslsigncode sign -h sha256 \
+    -in "${test}" -out "${test%.exe}-signed-ossl-1.exe" \
+    -st "${unixts}" \
+    -pkcs12 "${temp}" -pass "${code_pass}"
+  sleep 3
+  osslsigncode sign -h sha256 \
+    -in "${test}" -out "${test%.exe}-signed-ossl-2.exe"  \
+    -st "${unixts}" \
+    -pkcs12 "${temp}" -pass "${code_pass}"
 
-   # osslsigncode is non-deterministic, even if not specifying a timestamp
-   # server, because openssl PKCS #7 code will unconditionally include the
-   # local timestamp inside a `signingTime` PKCS #7 record.
-   if diff -s --binary "${test%.exe}-signed-ossl-1.exe" "${test%.exe}-signed-ossl-2.exe" > /dev/null; then
-      echo '! Info: osslsigncode code signing: deterministic'
-   else
-      echo '! Info: osslsigncode code signing: non-deterministic'
-   fi
+  rm -f "${temp}"
 
-   # using signtool.exe
+  # osslsigncode is non-deterministic, even if not specifying a timestamp
+  # server, because openssl PKCS #7 code will unconditionally include the
+  # local timestamp inside a `signingTime` PKCS #7 record.
+  if diff --report-identical-files --binary \
+       "${test%.exe}-signed-ossl-1.exe" \
+       "${test%.exe}-signed-ossl-2.exe" >/dev/null; then
+    echo '! Info: osslsigncode code signing: deterministic'
+  else
+    echo '! Info: osslsigncode code signing: non-deterministic'
+  fi
 
-   if [ "${os}" = 'win' ]; then
+  # using signtool.exe
 
-      # Root CA may need to be installed as a "Trust Root Certificate".
-      # It has to be confirmed on a GUI dialog:
-      #   certutil.exe -addStore -user -f 'Root' "${root}.crt"
+  if [ "${os}" = 'win' ]; then
 
-      cp "${test}" "${test%.exe}-signed-ms-ts.exe"
-      signtool.exe sign -fd sha256 \
-         -f "${code}.pfx" -p "${code_pass}" \
-         -td sha256 -tr "${ts}" \
-         "${test%.exe}-signed-ms-ts.exe"
+    # Root CA may need to be installed as a "Trust Root Certificate".
+    # It has to be confirmed on a GUI dialog:
+    #   certutil.exe -addStore -user -f 'Root' "${root}-cert.pem"
 
-      cp "${test}" "${test%.exe}-signed-ms-1.exe"
-      signtool.exe sign -fd sha256 \
-         -f "${code}.pfx" -p "${code_pass}" \
-         "${test%.exe}-signed-ms-1.exe"
-      sleep 3
-      cp "${test}" "${test%.exe}-signed-ms-2.exe"
-      signtool.exe sign -fd sha256 \
-         -f "${code}.pfx" -p "${code_pass}" \
-         "${test%.exe}-signed-ms-2.exe"
+    cp "${test}" "${test%.exe}-signed-ms-ts.exe"
+    signtool.exe sign -fd sha256 \
+      -f "${code}.pfx" -p "${code_pass}" \
+      -td sha256 -tr "${ts}" \
+      "${test%.exe}-signed-ms-ts.exe"
 
-      # Remove root CA:
-      #   certutil.exe -delStore -user 'Root' "$(openssl x509 -noout -subject -in "${root}.crt" | sed -n '/^subject/s/^.*CN=//p')"
+    cp "${test}" "${test%.exe}-signed-ms-1.exe"
+    signtool.exe sign -fd sha256 \
+      -f "${code}.pfx" -p "${code_pass}" \
+      "${test%.exe}-signed-ms-1.exe"
+    sleep 3
+    cp "${test}" "${test%.exe}-signed-ms-2.exe"
+    signtool.exe sign -fd sha256 \
+      -f "${code}.pfx" -p "${code_pass}" \
+      "${test%.exe}-signed-ms-2.exe"
 
-      # signtool.exe is deterministic, unless we specify a timestamp server
-      if diff -s --binary "${test%.exe}-signed-ms-1.exe" "${test%.exe}-signed-ms-2.exe" > /dev/null; then
-         echo '! Info: signtool.exe code signing: deterministic'
+    # Remove root CA:
+    #   certutil.exe -delStore -user 'Root' "$(openssl x509 -noout -subject -in "${root}-cert.pem" | sed -n '/^subject/s/^.*CN=//p')"
+
+    # signtool.exe is deterministic, unless we specify a timestamp server
+    if diff --report-identical-files --binary \
+         "${test%.exe}-signed-ms-1.exe" \
+         "${test%.exe}-signed-ms-2.exe" >/dev/null; then
+      echo '! Info: signtool.exe code signing: deterministic'
+    else
+      echo '! Info: signtool.exe code signing: non-deterministic'
+    fi
+  fi
+
+  if osslsigncode verify -CAfile "${root}-cert.pem" "${test}" 2>/dev/null | grep -q 'Signature verification: ok'; then
+    echo "! Fail: unsigned exe passes: ${test}"
+  else
+    echo "! OK: unsigned exe fails: ${test}"
+  fi
+
+  for file in "${test%.exe}"-*.exe; do
+
+    # Dump PKCS #7 signature record as PEM and as human-readable text
+    osslsigncode extract-signature \
+      -in "${file}" -pem -out "${file}.pkcs7" >/dev/null
+    openssl asn1parse -i -inform PEM -in "${file}.pkcs7" > "${file}.pkcs7.asn1.txt" || true
+
+    # Verify signature with osslsigncode
+    if osslsigncode verify -CAfile "${root}-cert.pem" "${file}" 2>/dev/null | grep -q 'Signature verification: ok'; then
+      echo "! OK: signed exe passes 'osslsigncode verify': ${file}"
+    else
+      echo "! Fail: signed exe fails 'osslsigncode verify': ${file}"
+    fi
+
+    unset wine
+    [ "${os}" = 'win' ] || wine=wine
+
+    if [ "${os}" = 'win' ]; then
+      # TODO: verify using `signtool.exe verify`
+
+      # Verify signature with sigcheck
+      if "${wine}" sigcheck64.exe -nobanner -accepteula "${file}"; then
+        # If we haven't specified a timestamp server when code signing,
+        # sigcheck will report the _current time_ as "Signing date".
+        echo "! OK: signed exe passes 'sigcheck64.exe': ${file}"
       else
-         echo '! Info: signtool.exe code signing: non-deterministic'
+        echo "! Fail: signed exe fails 'sigcheck64.exe': ${file}"
       fi
-   fi
-
-   if osslsigncode verify "${test}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null; then
-      echo "! Fail: unsigned exe passes: ${test}"
-   else
-      echo "! OK: unsigned exe fails: ${test}"
-   fi
-
-   for file in ${test%.exe}-*.exe; do
-
-      # TODO: Replace `strip_signature_header` with `-pem` osslsigncode option
-      #       @ osslsigncode above 1.7.1
-
-      # Dump PKCS #7 signature record as DER and as human-readable text
-      osslsigncode extract-signature \
-         -in "${file}" -out "${file}.pkcs7" > /dev/null
-      strip_signature_header "${file}.pkcs7"
-      openssl asn1parse -i -inform DER -in "${file}.pkcs7" > "${file}.pkcs7.asn1.txt" || true
-
-      # Verify signature with osslsigncode
-      if osslsigncode verify "${file}" 2> /dev/null | grep 'Signature verification: ok' > /dev/null; then
-         echo "! OK: signed exe passes 'osslsigncode verify': ${file}"
-      else
-         echo "! Fail: signed exe fails 'osslsigncode verify': ${file}"
-      fi
-
-      if [ "${os}" = 'win' ]; then
-
-         # TODO: verify using `signtool.exe verify`
-
-         # Verify signature with sigcheck
-         if sigcheck64.exe -nobanner -accepteula "${file}"; then
-            # If we haven't specified a timestamp server when code signing,
-            # sigcheck will report the _current time_ as "Signing date".
-            echo "! OK: signed exe passes 'sigcheck64.exe': ${file}"
-         else
-            echo "! Fail: signed exe fails 'sigcheck64.exe': ${file}"
-         fi
-      fi
-   done
+    fi
+  done
 else
-   echo "! Error: '${test}' not found."
+  echo "! Error: '${test}' not found."
 fi
